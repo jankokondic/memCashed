@@ -31,9 +31,10 @@ type Transfer struct {
 
 // Key represents a stored object with its field, TTL (Time-To-Live), and a pointer to its node in the LRU list.
 type Key struct {
-	field   []byte          // Object data field
-	ttl     time.Time       // Time-To-Live for the object
-	pointer *link_list.Node // Pointer to the node in the LRU list
+	field     []byte
+	ttl       time.Time
+	pointer   *link_list.Node
+	slabIndex int
 }
 
 // NewTransfer creates a new Transfer object with the specified payload, index, and connection.
@@ -73,7 +74,7 @@ func NewSlabManager(slabs []Slab, numberOfWorker int) *SlabManager {
 	sm := &SlabManager{
 		slabs: slabs,
 		lru:   make([]link_list.DLL, len(slabs)), // Initialize LRU for each slab
-		JobCh: make(chan Transfer),               // Channel for receiving transfer jobs
+		JobCh: make(chan Transfer, 65536),        // Channel for receiving transfer jobs
 	}
 
 	// Start a worker goroutine of numberOfWorker
@@ -188,29 +189,32 @@ func (s *Slab) AllocateMemory() ([]byte, error) {
 	s.Lock()
 	defer s.Unlock()
 
-	// Try to pop from the free list if there are free blocks
 	if !s.freeList.IsEmpty() {
 		ptr, err := s.freeList.Pop()
-		return unsafe.Slice((*byte)(ptr), s.slabSize), err
+		if err != nil {
+			return nil, err
+		}
+
+		return unsafe.Slice((*byte)(ptr), s.slabSize), nil
 	}
 
-	// Calculate the memory range for the new allocation
 	start := s.pagePointer
 	end := start + s.slabSize
 
-	// If no active page or insufficient space, allocate a new page
 	if s.currentPage == nil || !IsEnoughSpace(end, len(s.currentPage)) {
 		block, err := s.AllocateBlock()
 		if err != nil {
 			return nil, err
 		}
 
-		// Update the current page with the new block
 		s.UpdatePage(block)
-		return s.currentPage[0:s.slabSize], nil //new memory block
+
+		start = 0
+		end = s.slabSize
 	}
 
-	// Return the allocated memory block from the current page
+	s.pagePointer = end
+
 	return s.currentPage[start:end], nil
 }
 

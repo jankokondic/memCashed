@@ -56,9 +56,10 @@ func (s *SlabManager) SetOperationFn(payload Transfer) {
 	// Store the key-value pair in the store with TTL
 
 	s.store.Store(key, Key{
-		field:   payload.payload[bodyOffset : bodyOffset+bodySize],
-		ttl:     TLLParser(ttl),
-		pointer: node,
+		field:     payload.payload[bodyOffset : bodyOffset+bodySize],
+		ttl:       TLLParser(ttl),
+		pointer:   node,
+		slabIndex: payload.index,
 	})
 
 	if _, err := payload.conn.Write(constants.ObjectInserted); err != nil {
@@ -88,7 +89,7 @@ func (s *SlabManager) GetOperationFn(payload Transfer) {
 		s.store.Delete(key)
 		s.lru[payload.index].Delete(value.pointer) // Remove the node from LRU
 		memoryPointer := value.pointer.GetPointer()
-		s.slabs[payload.index].freeList.Push(memoryPointer)
+		s.slabs[value.slabIndex].freeList.Push(memoryPointer)
 
 		if _, err := payload.conn.Write(constants.ErrTimeExpire); err != nil {
 			log.Println(err)
@@ -124,7 +125,7 @@ func (s *SlabManager) DeleteOperationFn(payload Transfer) {
 	memoryPointer := value.pointer.GetPointer()
 
 	s.lru[payload.index].Delete(value.pointer) // Remove from LRU
-	s.slabs[payload.index].freeList.Push(memoryPointer)
+	s.slabs[value.slabIndex].freeList.Push(memoryPointer)
 	if _, err := payload.conn.Write(constants.ObjectDeleted); err != nil {
 		log.Println(err)
 	}

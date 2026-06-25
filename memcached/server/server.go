@@ -57,24 +57,27 @@ func (s *Server) Run() error {
 
 	// Infinite loop to accept and handle incoming connections.
 	for {
-		// Accept an incoming connection.
 		conn, err := ls.Accept()
 		if err != nil {
-			log.Println(err) // Log any connection errors.
-			continue         // Continue accepting other connections.
+			log.Println(err)
+			continue
 		}
 
-		// Increment the active connection count.
-		s.ActiveConn++
+		s.Lock()
 
-		// If the active connection count exceeds the maximum limit, close the connection.
-		if s.ActiveConn > s.MaxConn {
+		if s.ActiveConn >= s.MaxConn {
+			s.Unlock()
+
 			if err := conn.Close(); err != nil {
 				log.Println(err)
 			}
+
+			continue
 		}
 
-		// Handle the connection in a separate goroutine.
+		s.ActiveConn++
+		s.Unlock()
+
 		go s.HandleConn(conn)
 	}
 }
@@ -103,50 +106,39 @@ func Close(c io.Closer, msg string) {
 // HandleConn processes an individual TCP connection, reading data,
 // allocating slab memory, and delegating requests to a job channel.
 func (s *Server) HandleConn(conn net.Conn) {
-	// Ensure the connection is closed and the active connection count is reduced when done.
 	defer func() {
 		Close(conn, constants.InfoConnectionClose)
 		s.decrease()
 	}()
 
-	// Buffer to hold the first 4 bytes, which indicates the payload size.
 	bufSize := make([]byte, constants.BufferSizeTCP)
 
-	// Infinite loop to continuously read data from the connection.
 	for {
-		// Read the first 4 bytes (the length of the payload).
-		_, err := conn.Read(bufSize)
+		_, err := io.ReadFull(conn, bufSize)
 		if err != nil {
-			// If an error occurs during reading (excluding EOF), log it.
 			if err != io.EOF {
 				log.Println(err)
 			}
-
-			break // Exit the loop if reading fails.
+			break
 		}
 
-		// Decode the payload size from the received length bytes.
 		payloadSize := decoder.DecodeLength(bufSize)
 
-		// Get a slab block and its index from the memory allocator.
 		slabBlock, index, err := s.Manager.GetSlab(payloadSize, conn)
 		if err != nil {
-			log.Println(err) // Log error if slab memory allocation fails.
+			log.Println(err)
+			continue
 		}
 
-		// Read the actual payload data into the slab block.
-		_, err = conn.Read(slabBlock)
-		// If an error occurs during reading the payload (excluding EOF), log it.
+		_, err = io.ReadFull(conn, slabBlock[:payloadSize])
 		if err != nil {
 			if err != io.EOF {
 				log.Println(err)
 			}
-
-			break // Exit the loop if reading fails.
+			break
 		}
 
-		// Delegate the processed request to the slab manager's job channel.
-		s.Req(slabBlock, index, conn)
+		s.Req(slabBlock[:payloadSize], index, conn)
 	}
 }
 

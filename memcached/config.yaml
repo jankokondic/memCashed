@@ -11,7 +11,7 @@ server:
 # our program's launch, in order
 # to have full control over memory
 # (5GiB by default, defined in MiB)
-memory_for_allocate: 5120
+memory_for_allocate: 3000
 
 #number_of_worker defines the number
 # of parallel processes within the
