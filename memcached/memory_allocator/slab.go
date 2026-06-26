@@ -15,11 +15,11 @@ import (
 
 // SlabManager manages slabs, LRU (Least Recently Used) caches, and memory allocation.
 type SlabManager struct {
-	slabs        []Slab          // Slabs for memory allocation
-	lru          []link_list.DLL // Least Recently Used (LRU) cache for each slab
-	sync.RWMutex                 // Mutex to protect concurrent access to shared data
-	store        sync.Map        // Store to hold key-value pairs for cache management
-	JobCh        chan Transfer   // Channel to receive transfer jobs for processing
+	slabs []Slab                  // Slabs for memory allocation
+	lru   []*link_list.ShardedLRU // Least Recently Used (LRU) cache for each slab
+	// sync.RWMutex                         // Mutex to protect concurrent access to shared data
+	store sync.Map      // Store to hold key-value pairs for cache management
+	JobCh chan Transfer // Channel to receive transfer jobs for processing
 }
 
 // Transfer represents a data payload and connection information for a transfer task.
@@ -46,38 +46,30 @@ func NewTransfer(payload []byte, index int, conn io.Writer) Transfer { //Connect
 	}
 }
 
-// FreeSpace frees space in the slab's LRU cache by removing the least recently used node.
-func (s *SlabManager) FreeSpace(index, slabSize int) ([]byte, string) {
-	s.Lock()
-	defer s.Unlock()
-
-	lastNode := s.lru[index].LastNode() // Get the last (least recently used) node
-
-	s.lru[index].Delete(lastNode) // Delete the last node in the LRU cache
-
-	// Get free space from LRU after deleting the node
-	return s.lru[index].GetLRUFreeSpace(lastNode, slabSize), lastNode.GetKey()
-}
-
 // GetSlabIndex returns the slab at the specified index.
 func (s *SlabManager) GetSlabIndex(index int) *Slab {
 	return &s.slabs[index]
 }
 
 // GetLRUIndex returns the LRU cache at the specified index.
-func (s *SlabManager) GetLRUIndex(index int) *link_list.DLL {
-	return &s.lru[index]
+func (s *SlabManager) GetLRUIndex(index int) *link_list.ShardedLRU {
+	return s.lru[index]
 }
 
 // NewSlabManager creates a new SlabManager with the provided slabs and starts worker goroutines.
 func NewSlabManager(slabs []Slab, numberOfWorker int) *SlabManager {
-	sm := &SlabManager{
-		slabs: slabs,
-		lru:   make([]link_list.DLL, len(slabs)), // Initialize LRU for each slab
-		JobCh: make(chan Transfer, 65536),        // Channel for receiving transfer jobs
+	lrus := make([]*link_list.ShardedLRU, len(slabs))
+
+	for i := range lrus {
+		lrus[i] = link_list.NewShardedLRU()
 	}
 
-	// Start a worker goroutine of numberOfWorker
+	sm := &SlabManager{
+		slabs: slabs,
+		lru:   lrus,
+		JobCh: make(chan Transfer, 65536),
+	}
+
 	for range numberOfWorker {
 		go sm.Worker()
 	}

@@ -1,0 +1,2 @@
+go run main.go -backend custom -workers 64 -duration 60s -warmup 5s -keys 2000 -size 1024 -getratio 70
+go run main.go -backend custom -workers 64 -duration 60s -warmup 5s -keys 2000 -size 1024 -getratio 70

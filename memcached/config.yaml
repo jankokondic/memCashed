@@ -4,7 +4,7 @@ server:
 
   #the maximum number of connections
   # allowed at the same time
-  max_number_connection: 100
+  max_number_connection: 256
 
 #memory_for_allocate allows us to
 # allocate memory at the start of

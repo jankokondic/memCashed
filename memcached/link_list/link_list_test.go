@@ -10,7 +10,8 @@ func TestNewValueAndNodeGetters(t *testing.T) {
 	ptr := unsafe.Pointer(&data[0])
 
 	value := NewValue(ptr, "key1")
-	node := (&DLL{}).Inset(value)
+	lru := NewShardedLRU()
+	node := lru.Insert(value)
 
 	if node.GetKey() != "key1" {
 		t.Fatalf("expected key %q, got %q", "key1", node.GetKey())
@@ -21,18 +22,20 @@ func TestNewValueAndNodeGetters(t *testing.T) {
 	}
 }
 
-func TestInsetAddsNodesToFront(t *testing.T) {
-	var dll DLL
+func TestInsertAddsNodesToFrontInSameShard(t *testing.T) {
+	lru := NewShardedLRUWithShardCount(1)
 
-	n1 := dll.Inset(NewValue(nil, "first"))
-	n2 := dll.Inset(NewValue(nil, "second"))
-	n3 := dll.Inset(NewValue(nil, "third"))
+	n1 := lru.Insert(NewValue(nil, "first"))
+	n2 := lru.Insert(NewValue(nil, "second"))
+	n3 := lru.Insert(NewValue(nil, "third"))
 
-	if dll.root != n3 {
+	shard := &lru.shards[0]
+
+	if shard.root != n3 {
 		t.Fatal("expected root to be third inserted node")
 	}
 
-	if dll.last != n1 {
+	if shard.last != n1 {
 		t.Fatal("expected last to be first inserted node")
 	}
 
@@ -50,19 +53,21 @@ func TestInsetAddsNodesToFront(t *testing.T) {
 }
 
 func TestDeleteRootNode(t *testing.T) {
-	var dll DLL
+	lru := NewShardedLRUWithShardCount(1)
 
-	n1 := dll.Inset(NewValue(nil, "first"))
-	n2 := dll.Inset(NewValue(nil, "second"))
-	n3 := dll.Inset(NewValue(nil, "third"))
+	n1 := lru.Insert(NewValue(nil, "first"))
+	n2 := lru.Insert(NewValue(nil, "second"))
+	n3 := lru.Insert(NewValue(nil, "third"))
 
-	dll.Delete(n3)
+	lru.Delete(n3)
 
-	if dll.root != n2 {
+	shard := &lru.shards[0]
+
+	if shard.root != n2 {
 		t.Fatal("expected root to become second node")
 	}
 
-	if dll.last != n1 {
+	if shard.last != n1 {
 		t.Fatal("expected last to stay first node")
 	}
 
@@ -72,19 +77,21 @@ func TestDeleteRootNode(t *testing.T) {
 }
 
 func TestDeleteMiddleNode(t *testing.T) {
-	var dll DLL
+	lru := NewShardedLRUWithShardCount(1)
 
-	n1 := dll.Inset(NewValue(nil, "first"))
-	n2 := dll.Inset(NewValue(nil, "second"))
-	n3 := dll.Inset(NewValue(nil, "third"))
+	n1 := lru.Insert(NewValue(nil, "first"))
+	n2 := lru.Insert(NewValue(nil, "second"))
+	n3 := lru.Insert(NewValue(nil, "third"))
 
-	dll.Delete(n2)
+	lru.Delete(n2)
 
-	if dll.root != n3 {
+	shard := &lru.shards[0]
+
+	if shard.root != n3 {
 		t.Fatal("expected root to stay third node")
 	}
 
-	if dll.last != n1 {
+	if shard.last != n1 {
 		t.Fatal("expected last to stay first node")
 	}
 
@@ -102,19 +109,21 @@ func TestDeleteMiddleNode(t *testing.T) {
 }
 
 func TestDeleteLastNode(t *testing.T) {
-	var dll DLL
+	lru := NewShardedLRUWithShardCount(1)
 
-	n1 := dll.Inset(NewValue(nil, "first"))
-	n2 := dll.Inset(NewValue(nil, "second"))
-	n3 := dll.Inset(NewValue(nil, "third"))
+	n1 := lru.Insert(NewValue(nil, "first"))
+	n2 := lru.Insert(NewValue(nil, "second"))
+	n3 := lru.Insert(NewValue(nil, "third"))
 
-	dll.Delete(n1)
+	lru.Delete(n1)
 
-	if dll.root != n3 {
+	shard := &lru.shards[0]
+
+	if shard.root != n3 {
 		t.Fatal("expected root to stay third node")
 	}
 
-	if dll.last != n2 {
+	if shard.last != n2 {
 		t.Fatal("expected last to become second node")
 	}
 
@@ -124,65 +133,110 @@ func TestDeleteLastNode(t *testing.T) {
 }
 
 func TestDeleteNilDoesNothing(t *testing.T) {
-	var dll DLL
+	lru := NewShardedLRUWithShardCount(1)
 
-	n1 := dll.Inset(NewValue(nil, "first"))
+	n1 := lru.Insert(NewValue(nil, "first"))
 
-	dll.Delete(nil)
+	lru.Delete(nil)
 
-	if dll.root != n1 {
+	shard := &lru.shards[0]
+
+	if shard.root != n1 {
 		t.Fatal("expected root to stay unchanged")
 	}
 
-	if dll.last != n1 {
+	if shard.last != n1 {
 		t.Fatal("expected last to stay unchanged")
 	}
 }
 
-func TestRemoveEmptyListDoesNothing(t *testing.T) {
-	var dll DLL
+func TestPopLastFreeSpaceEmptyListDoesNothing(t *testing.T) {
+	lru := NewShardedLRUWithShardCount(1)
 
-	dll.Remove()
+	block, key, ok := lru.PopLastFreeSpace(4)
 
-	if dll.root != nil {
+	if ok {
+		t.Fatal("expected ok to be false")
+	}
+
+	if block != nil {
+		t.Fatal("expected block to be nil")
+	}
+
+	if key != "" {
+		t.Fatal("expected key to be empty")
+	}
+}
+
+func TestPopLastFreeSpaceSingleNode(t *testing.T) {
+	lru := NewShardedLRUWithShardCount(1)
+
+	data := make([]byte, 16)
+	copy(data, []byte("abcdefghijklmnop"))
+
+	lru.Insert(NewValue(unsafe.Pointer(&data[0]), "only"))
+
+	block, key, ok := lru.PopLastFreeSpace(4)
+
+	if !ok {
+		t.Fatal("expected ok to be true")
+	}
+
+	if key != "only" {
+		t.Fatalf("expected key %q, got %q", "only", key)
+	}
+
+	if string(block) != "abcd" {
+		t.Fatalf("expected block %q, got %q", "abcd", string(block))
+	}
+
+	shard := &lru.shards[0]
+
+	if shard.root != nil {
 		t.Fatal("expected root to be nil")
 	}
 
-	if dll.last != nil {
+	if shard.last != nil {
 		t.Fatal("expected last to be nil")
 	}
 }
 
-func TestRemoveSingleNode(t *testing.T) {
-	var dll DLL
+func TestPopLastFreeSpaceRemovesLastNode(t *testing.T) {
+	lru := NewShardedLRUWithShardCount(1)
 
-	dll.Inset(NewValue(nil, "only"))
+	data1 := make([]byte, 16)
+	data2 := make([]byte, 16)
+	data3 := make([]byte, 16)
 
-	dll.Remove()
+	copy(data1, []byte("1111222233334444"))
+	copy(data2, []byte("aaaabbbbccccdddd"))
+	copy(data3, []byte("xxxxxxxxyyyyyyyy"))
 
-	if dll.root != nil {
-		t.Fatal("expected root to be nil")
+	n1 := lru.Insert(NewValue(unsafe.Pointer(&data1[0]), "first"))
+	n2 := lru.Insert(NewValue(unsafe.Pointer(&data2[0]), "second"))
+	n3 := lru.Insert(NewValue(unsafe.Pointer(&data3[0]), "third"))
+
+	block, key, ok := lru.PopLastFreeSpace(4)
+
+	if !ok {
+		t.Fatal("expected ok to be true")
 	}
 
-	if dll.last != nil {
-		t.Fatal("expected last to be nil")
+	if key != "first" {
+		t.Fatalf("expected key %q, got %q", "first", key)
 	}
-}
 
-func TestRemoveLastNode(t *testing.T) {
-	var dll DLL
+	if string(block) != "1111" {
+		t.Fatalf("expected block %q, got %q", "1111", string(block))
+	}
 
-	n1 := dll.Inset(NewValue(nil, "first"))
-	n2 := dll.Inset(NewValue(nil, "second"))
-	n3 := dll.Inset(NewValue(nil, "third"))
+	shard := &lru.shards[0]
 
-	dll.Remove()
-
-	if dll.root != n3 {
+	if shard.root != n3 {
 		t.Fatal("expected root to stay third node")
 	}
 
-	if dll.last != n2 {
+	if shard.last != n2 {
 		t.Fatal("expected last to become second node")
 	}
 
@@ -196,28 +250,28 @@ func TestRemoveLastNode(t *testing.T) {
 }
 
 func TestLastNode(t *testing.T) {
-	var dll DLL
+	lru := NewShardedLRUWithShardCount(1)
 
-	if dll.LastNode() != nil {
+	if lru.LastNode("any") != nil {
 		t.Fatal("expected last node of empty list to be nil")
 	}
 
-	n1 := dll.Inset(NewValue(nil, "first"))
+	n1 := lru.Insert(NewValue(nil, "first"))
 
-	if dll.LastNode() != n1 {
+	if lru.LastNode("first") != n1 {
 		t.Fatal("expected last node to be first node")
 	}
 }
 
 func TestGetLRUFreeSpace(t *testing.T) {
-	var dll DLL
+	lru := NewShardedLRUWithShardCount(1)
 
 	data := make([]byte, 16)
 	copy(data, []byte("abcdefghijklmnop"))
 
-	node := dll.Inset(NewValue(unsafe.Pointer(&data[0]), "key1"))
+	node := lru.Insert(NewValue(unsafe.Pointer(&data[0]), "key1"))
 
-	freeSpace := dll.GetLRUFreeSpace(node, 4)
+	freeSpace := lru.GetLRUFreeSpace(node, 4)
 
 	if string(freeSpace) != "abcd" {
 		t.Fatalf("expected %q, got %q", "abcd", string(freeSpace))
@@ -231,19 +285,21 @@ func TestGetLRUFreeSpace(t *testing.T) {
 }
 
 func TestReadMovesMiddleNodeToFront(t *testing.T) {
-	var dll DLL
+	lru := NewShardedLRUWithShardCount(1)
 
-	n1 := dll.Inset(NewValue(nil, "first"))
-	n2 := dll.Inset(NewValue(nil, "second"))
-	n3 := dll.Inset(NewValue(nil, "third"))
+	n1 := lru.Insert(NewValue(nil, "first"))
+	n2 := lru.Insert(NewValue(nil, "second"))
+	n3 := lru.Insert(NewValue(nil, "third"))
 
-	dll.Read(n2)
+	lru.Read(n2)
 
-	if dll.root != n2 {
+	shard := &lru.shards[0]
+
+	if shard.root != n2 {
 		t.Fatal("expected second node to become root")
 	}
 
-	if dll.last != n1 {
+	if shard.last != n1 {
 		t.Fatal("expected last to stay first node")
 	}
 
@@ -261,36 +317,40 @@ func TestReadMovesMiddleNodeToFront(t *testing.T) {
 }
 
 func TestReadRootDoesNothing(t *testing.T) {
-	var dll DLL
+	lru := NewShardedLRUWithShardCount(1)
 
-	n1 := dll.Inset(NewValue(nil, "first"))
-	n2 := dll.Inset(NewValue(nil, "second"))
+	n1 := lru.Insert(NewValue(nil, "first"))
+	n2 := lru.Insert(NewValue(nil, "second"))
 
-	dll.Read(n2)
+	lru.Read(n2)
 
-	if dll.root != n2 {
+	shard := &lru.shards[0]
+
+	if shard.root != n2 {
 		t.Fatal("expected root to stay second node")
 	}
 
-	if dll.last != n1 {
+	if shard.last != n1 {
 		t.Fatal("expected last to stay first node")
 	}
 }
 
 func TestReadLastNodeDoesNotPanic(t *testing.T) {
-	var dll DLL
+	lru := NewShardedLRUWithShardCount(1)
 
-	n1 := dll.Inset(NewValue(nil, "first"))
-	n2 := dll.Inset(NewValue(nil, "second"))
-	n3 := dll.Inset(NewValue(nil, "third"))
+	n1 := lru.Insert(NewValue(nil, "first"))
+	n2 := lru.Insert(NewValue(nil, "second"))
+	n3 := lru.Insert(NewValue(nil, "third"))
 
-	dll.Read(n1)
+	lru.Read(n1)
 
-	if dll.root != n1 {
+	shard := &lru.shards[0]
+
+	if shard.root != n1 {
 		t.Fatal("expected first node to become root")
 	}
 
-	if dll.last != n2 {
+	if shard.last != n2 {
 		t.Fatal("expected last to become second node")
 	}
 

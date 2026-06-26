@@ -14,6 +14,19 @@ func ParseOperation(payload []byte) byte {
 	return payload[0]
 }
 
+func (s *SlabManager) Process(payload Transfer) {
+	switch ParseOperation(payload.payload) {
+	case constants.SetOperation:
+		s.SetOperationFn(payload)
+	case constants.GetOperation:
+		s.GetOperationFn(payload)
+	case constants.DeleteOperation:
+		s.DeleteOperationFn(payload)
+	default:
+		log.Println(constants.ErrOperationIsNotSupported)
+	}
+}
+
 // Worker listens for transfer jobs and processes them based on the payload command.
 func (s *SlabManager) Worker() {
 	for payload := range s.JobCh {
@@ -59,7 +72,7 @@ func (s *SlabManager) SetOperationFn(payload Transfer) {
 		s.slabs[oldValue.slabIndex].FreeMemory(memoryPointer)
 	}
 
-	node := s.lru[payload.index].Inset(
+	node := s.lru[payload.index].Insert(
 		link_list.NewValue(unsafe.Pointer(&payload.payload[0]), key),
 	)
 
