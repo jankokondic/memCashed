@@ -56,7 +56,7 @@ func newTestSlabManager() *SlabManager {
 		NewSlab(65536, 0, allocator),
 	}
 
-	return NewSlabManager(slabs, 0)
+	return NewSlabManager(slabs, 4)
 }
 
 func makeTestPayload(operation byte, key string, ttl uint32, body []byte) []byte {
@@ -95,8 +95,6 @@ func waitForBytes(t *testing.T, writer *testWriter, expected []byte) {
 func TestWorkerSetGetDeleteFlow(t *testing.T) {
 	manager := newTestSlabManager()
 
-	go manager.Worker()
-
 	key := "name"
 	value := []byte("janko")
 
@@ -110,8 +108,7 @@ func TestWorkerSetGetDeleteFlow(t *testing.T) {
 	copy(setBlock, setPayload)
 
 	setWriter := &testWriter{}
-
-	manager.JobCh <- NewTransfer(setBlock, setIndex, setWriter)
+	manager.Dispatch(NewTransfer(setBlock, setIndex, setWriter))
 
 	waitForBytes(t, setWriter, constants.ObjectInserted)
 
@@ -125,8 +122,7 @@ func TestWorkerSetGetDeleteFlow(t *testing.T) {
 	copy(getBlock, getPayload)
 
 	getWriter := &testWriter{}
-
-	manager.JobCh <- NewTransfer(getBlock, getIndex, getWriter)
+	manager.Dispatch(NewTransfer(getBlock, getIndex, getWriter))
 
 	waitForBytes(t, getWriter, value)
 
@@ -140,8 +136,7 @@ func TestWorkerSetGetDeleteFlow(t *testing.T) {
 	copy(deleteBlock, deletePayload)
 
 	deleteWriter := &testWriter{}
-
-	manager.JobCh <- NewTransfer(deleteBlock, deleteIndex, deleteWriter)
+	manager.Dispatch(NewTransfer(deleteBlock, deleteIndex, deleteWriter))
 
 	waitForBytes(t, deleteWriter, constants.ObjectDeleted)
 
@@ -155,8 +150,7 @@ func TestWorkerSetGetDeleteFlow(t *testing.T) {
 	copy(getAgainBlock, getAgainPayload)
 
 	getAgainWriter := &testWriter{}
-
-	manager.JobCh <- NewTransfer(getAgainBlock, getAgainIndex, getAgainWriter)
+	manager.Dispatch(NewTransfer(getAgainBlock, getAgainIndex, getAgainWriter))
 
 	waitForBytes(t, getAgainWriter, constants.ErrObjectNotFound)
 }
@@ -219,8 +213,6 @@ func TestChooseOperationSetGetDeleteFlow(t *testing.T) {
 func TestWorkerExpiredTTL(t *testing.T) {
 	manager := newTestSlabManager()
 
-	go manager.Worker()
-
 	key := "token"
 	value := []byte("abc123")
 
@@ -234,7 +226,7 @@ func TestWorkerExpiredTTL(t *testing.T) {
 	copy(setBlock, setPayload)
 
 	setWriter := &testWriter{}
-	manager.JobCh <- NewTransfer(setBlock, setIndex, setWriter)
+	manager.Dispatch(NewTransfer(setBlock, setIndex, setWriter))
 
 	waitForBytes(t, setWriter, constants.ObjectInserted)
 
@@ -250,7 +242,7 @@ func TestWorkerExpiredTTL(t *testing.T) {
 	copy(getBlock, getPayload)
 
 	getWriter := &testWriter{}
-	manager.JobCh <- NewTransfer(getBlock, getIndex, getWriter)
+	manager.Dispatch(NewTransfer(getBlock, getIndex, getWriter))
 
 	waitForBytes(t, getWriter, constants.ErrTimeExpire)
 }

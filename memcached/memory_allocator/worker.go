@@ -14,30 +14,19 @@ func ParseOperation(payload []byte) byte {
 	return payload[0]
 }
 
-// Worker listens for transfer jobs and processes them based on the payload command.
-func (s *SlabManager) Worker() {
-	for payload := range s.JobCh {
-		switch ParseOperation(payload.payload) {
-		case constants.SetOperation: // Command to store data
-			s.SetOperationFn(payload)
-		case constants.GetOperation: // Command to get data
-			s.GetOperationFn(payload)
-		case constants.DeleteOperation: // Command to delete data
-			s.DeleteOperationFn(payload)
-		default:
-			log.Println(constants.ErrOperationIsNotSupported)
-		}
+func (s *SlabManager) Worker(jobCh <-chan Transfer) {
+	for payload := range jobCh {
+		s.chooseOperation(payload)
 	}
 }
 
-// test usage
 func (s *SlabManager) chooseOperation(payload Transfer) {
 	switch ParseOperation(payload.payload) {
-	case constants.SetOperation: // Command to store data
+	case constants.SetOperation:
 		s.SetOperationFn(payload)
-	case constants.GetOperation: // Command to get data
+	case constants.GetOperation:
 		s.GetOperationFn(payload)
-	case constants.DeleteOperation: // Command to delete data
+	case constants.DeleteOperation:
 		s.DeleteOperationFn(payload)
 	default:
 		log.Println(constants.ErrOperationIsNotSupported)
@@ -50,9 +39,7 @@ func (s *SlabManager) SetOperationFn(payload Transfer) {
 	bodyOffset := constants.HeaderSize + keySize
 	key := string(payload.payload[constants.HeaderSize:bodyOffset])
 
-	if oldValueObject, isFound := s.store.Load(key); isFound {
-		oldValue := oldValueObject.(Key)
-
+	if oldValue, isFound := s.store.Load(key); isFound {
 		s.lru[oldValue.slabIndex].Delete(oldValue.pointer)
 
 		memoryPointer := oldValue.pointer.GetPointer()
@@ -81,15 +68,13 @@ func (s *SlabManager) GetOperationFn(payload Transfer) {
 
 	s.slabs[payload.index].FreeMemory(unsafe.Pointer(&payload.payload[0]))
 
-	valueObject, isFound := s.store.Load(key)
+	value, isFound := s.store.Load(key)
 	if !isFound {
 		if _, err := payload.conn.Write(constants.ErrObjectNotFound); err != nil {
 			log.Println(err)
 		}
 		return
 	}
-
-	value := valueObject.(Key)
 
 	if !value.ttl.IsZero() && time.Now().After(value.ttl) {
 		s.store.Delete(key)
@@ -117,15 +102,13 @@ func (s *SlabManager) DeleteOperationFn(payload Transfer) {
 
 	s.slabs[payload.index].FreeMemory(unsafe.Pointer(&payload.payload[0]))
 
-	valueObject, isFound := s.store.Load(key)
+	value, isFound := s.store.Load(key)
 	if !isFound {
 		if _, err := payload.conn.Write(constants.ErrObjectNotFound); err != nil {
 			log.Println(err)
 		}
 		return
 	}
-
-	value := valueObject.(Key)
 
 	s.store.Delete(key)
 	s.lru[value.slabIndex].Delete(value.pointer)

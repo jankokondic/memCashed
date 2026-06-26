@@ -142,5 +142,5 @@ func (s *Server) HandleConn(conn net.Conn) {
 // including the payload, index, and connection.
 func (s *Server) Req(buf []byte, index int, conn net.Conn) {
 	// Create a new transfer object and send it to the job channel for further processing.
-	s.Manager.JobCh <- memory_allocator.NewTransfer(buf, index, conn)
+	s.Manager.Dispatch(memory_allocator.NewTransfer(buf, index, conn))
 }

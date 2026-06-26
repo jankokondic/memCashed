@@ -200,7 +200,7 @@ func TestSlabAllocateMemoryReusesFreeList(t *testing.T) {
 	}
 
 	ptr := unsafe.Pointer(&block1[0])
-	slab.freeList.Push(ptr)
+	slab.FreeMemory(ptr)
 
 	block2, err := slab.AllocateMemory()
 	if err != nil {
@@ -347,12 +347,26 @@ func TestNewSlabManager(t *testing.T) {
 		t.Fatalf("expected %d lru lists, got %d", len(slabs), len(manager.lru))
 	}
 
+	if manager.store == nil {
+		t.Fatal("expected store, got nil")
+	}
+
 	if manager.JobCh == nil {
 		t.Fatal("expected JobCh, got nil")
 	}
 
-	if cap(manager.JobCh) != 65536 {
-		t.Fatalf("expected JobCh capacity 65536, got %d", cap(manager.JobCh))
+	if len(manager.JobCh) != 4 {
+		t.Fatalf("expected 4 job queues, got %d", len(manager.JobCh))
+	}
+
+	for i, ch := range manager.JobCh {
+		if ch == nil {
+			t.Fatalf("expected JobCh[%d], got nil", i)
+		}
+
+		if cap(ch) == 0 {
+			t.Fatalf("expected JobCh[%d] to have capacity greater than 0", i)
+		}
 	}
 }
 
@@ -370,7 +384,7 @@ func TestSlabManagerGetIndex(t *testing.T) {
 		NewSlab(1024, 0, allocator),
 	}
 
-	manager := NewSlabManager(slabs, 0)
+	manager := NewSlabManager(slabs, 1)
 
 	tests := []struct {
 		dataSize          int
@@ -418,7 +432,7 @@ func TestSlabManagerGetSlabIndex(t *testing.T) {
 		NewSlab(32, 0, allocator),
 	}
 
-	manager := NewSlabManager(slabs, 0)
+	manager := NewSlabManager(slabs, 1)
 
 	slab := manager.GetSlabIndex(1)
 
@@ -440,7 +454,7 @@ func TestSlabManagerGetLRUIndex(t *testing.T) {
 		NewSlab(32, 0, allocator),
 	}
 
-	manager := NewSlabManager(slabs, 0)
+	manager := NewSlabManager(slabs, 1)
 
 	lru := manager.GetLRUIndex(1)
 
@@ -458,7 +472,7 @@ func TestSlabManagerChoseSlab(t *testing.T) {
 		NewSlab(32, 0, allocator),
 	}
 
-	manager := NewSlabManager(slabs, 0)
+	manager := NewSlabManager(slabs, 1)
 
 	slab := manager.ChoseSlab(2)
 
@@ -485,7 +499,7 @@ func TestSlabManagerGetSlab(t *testing.T) {
 		NewSlab(1024, 0, allocator),
 	}
 
-	manager := NewSlabManager(slabs, 0)
+	manager := NewSlabManager(slabs, 1)
 
 	block, index, err := manager.GetSlab(100, nil)
 	if err != nil {
@@ -525,7 +539,7 @@ func TestSlabManagerGetSlabAllSizes(t *testing.T) {
 		NewSlab(constants.MiB, 0, allocator),
 	}
 
-	manager := NewSlabManager(slabs, 0)
+	manager := NewSlabManager(slabs, 1)
 
 	payloadSizes := []int{
 		1,

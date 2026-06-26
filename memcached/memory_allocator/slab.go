@@ -15,11 +15,10 @@ import (
 
 // SlabManager manages slabs, LRU (Least Recently Used) caches, and memory allocation.
 type SlabManager struct {
-	slabs        []Slab          // Slabs for memory allocation
-	lru          []link_list.DLL // Least Recently Used (LRU) cache for each slab
-	sync.RWMutex                 // Mutex to protect concurrent access to shared data
-	store        sync.Map        // Store to hold key-value pairs for cache management
-	JobCh        chan Transfer   // Channel to receive transfer jobs for processing
+	slabs []Slab          // Slabs for memory allocation
+	lru   []link_list.DLL // Least Recently Used (LRU) cache for each slab
+	store *ShardedStore
+	JobCh []chan Transfer // Channel to receive transfer jobs for processing
 }
 
 // Transfer represents a data payload and connection information for a transfer task.
@@ -48,9 +47,6 @@ func NewTransfer(payload []byte, index int, conn io.Writer) Transfer { //Connect
 
 // FreeSpace frees space in the slab's LRU cache by removing the least recently used node.
 func (s *SlabManager) FreeSpace(index, slabSize int) ([]byte, string) {
-	s.Lock()
-	defer s.Unlock()
-
 	lastNode := s.lru[index].LastNode() // Get the last (least recently used) node
 
 	s.lru[index].Delete(lastNode) // Delete the last node in the LRU cache
@@ -71,18 +67,33 @@ func (s *SlabManager) GetLRUIndex(index int) *link_list.DLL {
 
 // NewSlabManager creates a new SlabManager with the provided slabs and starts worker goroutines.
 func NewSlabManager(slabs []Slab, numberOfWorker int) *SlabManager {
-	sm := &SlabManager{
-		slabs: slabs,
-		lru:   make([]link_list.DLL, len(slabs)), // Initialize LRU for each slab
-		JobCh: make(chan Transfer, 65536),        // Channel for receiving transfer jobs
+	if numberOfWorker < 1 {
+		numberOfWorker = 1
 	}
 
-	// Start a worker goroutine of numberOfWorker
-	for range numberOfWorker {
-		go sm.Worker()
+	sm := &SlabManager{
+		slabs: slabs,
+		lru:   make([]link_list.DLL, len(slabs)),
+		store: NewShardedStore(),
+		JobCh: make([]chan Transfer, numberOfWorker),
+	}
+
+	for i := 0; i < numberOfWorker; i++ {
+		sm.JobCh[i] = make(chan Transfer, 8192)
+		go sm.Worker(sm.JobCh[i])
 	}
 
 	return sm
+}
+
+func (s *SlabManager) Dispatch(payload Transfer) {
+	if len(s.JobCh) == 0 {
+		s.chooseOperation(payload)
+		return
+	}
+
+	index := payload.index % len(s.JobCh)
+	s.JobCh[index] <- payload
 }
 
 // GetSlab allocates a slab of memory based on the payload size, handles errors, and frees space if necessary.
