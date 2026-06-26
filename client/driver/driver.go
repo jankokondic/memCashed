@@ -2,7 +2,6 @@ package client
 
 import (
 	"errors"
-	"hash/fnv"
 	"io"
 	"log"
 	"net"
@@ -16,7 +15,7 @@ import (
 const (
 	defaultQueueSize      = 65536
 	defaultTimeout        = 5 * time.Second
-	defaultReadBufferSize = 1024*1024 + 10
+	defaultReadBufferSize = 1024*1024 + 64
 	defaultReconnectDelay = 100 * time.Millisecond
 	defaultReconnectTries = 2
 )
@@ -54,6 +53,12 @@ type Result struct {
 type request struct {
 	payload []byte
 	result  chan Result
+}
+
+var resultPool = sync.Pool{
+	New: func() any {
+		return make(chan Result, 1)
+	},
 }
 
 func New() (*Driver, error) {
@@ -98,6 +103,7 @@ func NewConnection(addr string, numberConnection int) (*Connection, error) {
 	}
 
 	if err := c.Init(); err != nil {
+		_ = c.Close()
 		return nil, err
 	}
 
@@ -113,7 +119,6 @@ func (c *Connection) Init() error {
 		}
 
 		c.workers = append(c.workers, worker)
-
 		go worker.Worker()
 	}
 
@@ -126,11 +131,7 @@ func NewSingleConnection(communicatorCh chan request, addr string) (*SingleConne
 		return nil, err
 	}
 
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.SetNoDelay(true)
-		_ = tcpConn.SetKeepAlive(true)
-		_ = tcpConn.SetKeepAlivePeriod(30 * time.Second)
-	}
+	configureTCP(conn)
 
 	return &SingleConnection{
 		addr:           addr,
@@ -138,6 +139,20 @@ func NewSingleConnection(communicatorCh chan request, addr string) (*SingleConne
 		conn:           conn,
 		readBuffer:     make([]byte, defaultReadBufferSize),
 	}, nil
+}
+
+func configureTCP(conn net.Conn) {
+	tcpConn, ok := conn.(*net.TCPConn)
+	if !ok {
+		return
+	}
+
+	_ = tcpConn.SetNoDelay(true)
+	_ = tcpConn.SetKeepAlive(true)
+	_ = tcpConn.SetKeepAlivePeriod(30 * time.Second)
+
+	_ = tcpConn.SetReadBuffer(defaultReadBufferSize)
+	_ = tcpConn.SetWriteBuffer(defaultReadBufferSize)
 }
 
 func (s *SingleConnection) Worker() {
@@ -148,8 +163,6 @@ func (s *SingleConnection) Worker() {
 			Data: data,
 			Err:  err,
 		}
-
-		close(req.result)
 	}
 }
 
@@ -179,11 +192,8 @@ func (s *SingleConnection) sendOnce(payload []byte) ([]byte, error) {
 		return nil, errors.New("connection is not available")
 	}
 
-	if err := s.conn.SetDeadline(time.Now().Add(defaultTimeout)); err != nil {
-		return nil, err
-	}
-
-	if _, err := s.conn.Write(payload); err != nil {
+	_, err := s.conn.Write(payload)
+	if err != nil {
 		return nil, err
 	}
 
@@ -217,11 +227,7 @@ func (s *SingleConnection) reconnect() error {
 		return err
 	}
 
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		_ = tcpConn.SetNoDelay(true)
-		_ = tcpConn.SetKeepAlive(true)
-		_ = tcpConn.SetKeepAlivePeriod(30 * time.Second)
-	}
+	configureTCP(conn)
 
 	s.conn = conn
 
@@ -241,60 +247,57 @@ func (d *Driver) Delete(key string) ([]byte, error) {
 }
 
 func (d *Driver) SetBytes(key, value []byte, ttl int) ([]byte, error) {
-	resCh, err := d.SetAsync(key, value, ttl)
-	if err != nil {
-		return nil, err
-	}
-
-	res := <-resCh
-	return res.Data, res.Err
-}
-
-func (d *Driver) GetBytes(key []byte) ([]byte, error) {
-	resCh, err := d.GetAsync(key)
-	if err != nil {
-		return nil, err
-	}
-
-	res := <-resCh
-	return res.Data, res.Err
-}
-
-func (d *Driver) DeleteBytes(key []byte) ([]byte, error) {
-	resCh, err := d.DeleteAsync(key)
-	if err != nil {
-		return nil, err
-	}
-
-	res := <-resCh
-	return res.Data, res.Err
-}
-
-func (d *Driver) SetAsync(key, value []byte, ttl int) (<-chan Result, error) {
 	payload, err := p.Set(key, value, ttl)
 	if err != nil {
 		return nil, err
 	}
 
-	return d.operation(payload, d.route(key))
+	return d.operationSync(payload, d.route(key))
 }
 
-func (d *Driver) GetAsync(key []byte) (<-chan Result, error) {
+func (d *Driver) GetBytes(key []byte) ([]byte, error) {
 	payload, err := p.Get(key)
 	if err != nil {
 		return nil, err
 	}
 
-	return d.operation(payload, d.route(key))
+	return d.operationSync(payload, d.route(key))
 }
 
-func (d *Driver) DeleteAsync(key []byte) (<-chan Result, error) {
+func (d *Driver) DeleteBytes(key []byte) ([]byte, error) {
 	payload, err := p.Delete(key)
 	if err != nil {
 		return nil, err
 	}
 
-	return d.operation(payload, d.route(key))
+	return d.operationSync(payload, d.route(key))
+}
+
+func (d *Driver) SetAsync(key, value []byte, ttl int) (chan Result, error) {
+	payload, err := p.Set(key, value, ttl)
+	if err != nil {
+		return nil, err
+	}
+
+	return d.operationAsync(payload, d.route(key))
+}
+
+func (d *Driver) GetAsync(key []byte) (chan Result, error) {
+	payload, err := p.Get(key)
+	if err != nil {
+		return nil, err
+	}
+
+	return d.operationAsync(payload, d.route(key))
+}
+
+func (d *Driver) DeleteAsync(key []byte) (chan Result, error) {
+	payload, err := p.Delete(key)
+	if err != nil {
+		return nil, err
+	}
+
+	return d.operationAsync(payload, d.route(key))
 }
 
 func (d *Driver) SetReq(key, value []byte, ttl int) (<-chan []byte, error) {
@@ -324,7 +327,37 @@ func (d *Driver) DeleteReq(key []byte) (<-chan []byte, error) {
 	return onlyData(resCh), nil
 }
 
-func (d *Driver) operation(payload []byte, route int) (<-chan Result, error) {
+func (d *Driver) operationSync(payload []byte, route int) ([]byte, error) {
+	if len(d.Conn) == 0 {
+		return nil, errors.New("driver has no connections")
+	}
+
+	if route < 0 || route >= len(d.Conn) {
+		return nil, errors.New("invalid route")
+	}
+
+	resultCh := resultPool.Get().(chan Result)
+
+	req := request{
+		payload: payload,
+		result:  resultCh,
+	}
+
+	select {
+	case d.Conn[route].PayloadCh <- req:
+	default:
+		resultPool.Put(resultCh)
+		return nil, errors.New("request queue full")
+	}
+
+	res := <-resultCh
+
+	resultPool.Put(resultCh)
+
+	return res.Data, res.Err
+}
+
+func (d *Driver) operationAsync(payload []byte, route int) (chan Result, error) {
 	if len(d.Conn) == 0 {
 		return nil, errors.New("driver has no connections")
 	}
@@ -340,29 +373,32 @@ func (d *Driver) operation(payload []byte, route int) (<-chan Result, error) {
 		result:  resultCh,
 	}
 
-	timeout := d.Timeout
-	if timeout <= 0 {
-		timeout = defaultTimeout
-	}
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
 	select {
 	case d.Conn[route].PayloadCh <- req:
 		return resultCh, nil
 
-	case <-timer.C:
-		close(resultCh)
-		return nil, errors.New("request queue timeout")
+	default:
+		return nil, errors.New("request queue full")
 	}
 }
 
 func (d *Driver) route(key []byte) int {
-	h := fnv.New32a()
-	_, _ = h.Write(key)
+	if len(d.Conn) == 1 {
+		return 0
+	}
 
-	return int(h.Sum32()) % len(d.Conn)
+	return int(fnv32a(key)) % len(d.Conn)
+}
+
+func fnv32a(data []byte) uint32 {
+	var h uint32 = 2166136261
+
+	for _, b := range data {
+		h ^= uint32(b)
+		h *= 16777619
+	}
+
+	return h
 }
 
 func onlyData(resCh <-chan Result) <-chan []byte {
