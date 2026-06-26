@@ -89,34 +89,39 @@ func NewSlabManager(slabs []Slab, numberOfWorker int) *SlabManager {
 func (s *SlabManager) GetSlab(payloadSize int, conn net.Conn) ([]byte, int, error) {
 	slabIndex, chunkSize := s.GetIndex(payloadSize)
 
-	// Attempt to allocate memory from the chosen slab
 	slabBlock, err := s.ChoseSlab(slabIndex).AllocateMemory()
-	if err != nil {
-		// If memory allocation fails, handle the error
-		fmt.Println(err)
+	if err == nil {
+		return slabBlock, slabIndex, nil
+	}
 
-		// If slab is inactive, notify the client and try to read the rest of the request
-		if !s.GetSlabIndex(slabIndex).IsSlabActive() {
-			conn.Write([]byte(err.Error()))
+	if !s.GetSlabIndex(slabIndex).IsSlabActive() {
+		if conn != nil {
+			_, _ = conn.Write([]byte(err.Error()))
 
-			// and if I can't allocate memory to my server I still have to read the req to the end
-			_, err := conn.Read(constants.NoReq)
-			if err != nil {
-				return nil, -1, err
+			_, readErr := conn.Read(constants.NoReq)
+			if readErr != nil {
+				return nil, -1, readErr
 			}
 		}
 
-		// If there is no more space in memory, uses LRU
-		// (Least Recently Used) policy to free up space.
-		s.Lock()
-		lastNode := s.lru[slabIndex].LastNode()                           // Get the last LRU node
-		s.lru[slabIndex].Delete(lastNode)                                 // Delete last node in
-		slabBlock = s.lru[slabIndex].GetLRUFreeSpace(lastNode, chunkSize) // Get free space after deleting the node
-		s.Unlock()
-
-		// Deletes the key from the hash table.
-		s.store.Delete(lastNode.GetKey())
+		return nil, slabIndex, err
 	}
+
+	s.Lock()
+
+	lastNode := s.lru[slabIndex].LastNode()
+	if lastNode == nil {
+		s.Unlock()
+		return nil, slabIndex, fmt.Errorf("there is not enough space and LRU is empty")
+	}
+
+	s.lru[slabIndex].Delete(lastNode)
+	slabBlock = s.lru[slabIndex].GetLRUFreeSpace(lastNode, chunkSize)
+	key := lastNode.GetKey()
+
+	s.Unlock()
+
+	s.store.Delete(key)
 
 	return slabBlock, slabIndex, nil
 }
