@@ -45,15 +45,23 @@ func (s *SlabManager) chooseOperation(payload Transfer) {
 }
 
 func (s *SlabManager) SetOperationFn(payload Transfer) {
-	_, keySize, ttl, bodySize := decoder.Decode(payload.payload) // Decode the payload
+	_, keySize, ttl, bodySize := decoder.Decode(payload.payload)
 
 	bodyOffset := constants.HeaderSize + keySize
-	key := string(payload.payload[constants.HeaderSize:bodyOffset]) // Extract key from the payload
+	key := string(payload.payload[constants.HeaderSize:bodyOffset])
 
-	// Insert the key into the LRU cache
-	node := s.lru[payload.index].Inset(link_list.NewValue(unsafe.Pointer(&payload.payload[0]), key))
+	if oldValueObject, isFound := s.store.Load(key); isFound {
+		oldValue := oldValueObject.(Key)
 
-	// Store the key-value pair in the store with TTL
+		s.lru[oldValue.slabIndex].Delete(oldValue.pointer)
+
+		memoryPointer := oldValue.pointer.GetPointer()
+		s.slabs[oldValue.slabIndex].FreeMemory(memoryPointer)
+	}
+
+	node := s.lru[payload.index].Inset(
+		link_list.NewValue(unsafe.Pointer(&payload.payload[0]), key),
+	)
 
 	s.store.Store(key, Key{
 		field:     payload.payload[bodyOffset : bodyOffset+bodySize],
@@ -63,17 +71,16 @@ func (s *SlabManager) SetOperationFn(payload Transfer) {
 	})
 
 	if _, err := payload.conn.Write(constants.ObjectInserted); err != nil {
-		log.Println(err) // Log any errors that occur while writing to the connection
+		log.Println(err)
 	}
 }
 
 func (s *SlabManager) GetOperationFn(payload Transfer) {
-	_, keySize, _, _ := decoder.Decode(payload.payload)                                 // Decode the payload
-	key := string(payload.payload[constants.HeaderSize : constants.HeaderSize+keySize]) // Extract key from the payload
+	_, keySize, _, _ := decoder.Decode(payload.payload)
+	key := string(payload.payload[constants.HeaderSize : constants.HeaderSize+keySize])
 
-	s.slabs[payload.index].freeList.Push(unsafe.Pointer(&payload.payload[0])) //delete our header space
+	s.slabs[payload.index].FreeMemory(unsafe.Pointer(&payload.payload[0]))
 
-	// Fetch the value from the store
 	valueObject, isFound := s.store.Load(key)
 	if !isFound {
 		if _, err := payload.conn.Write(constants.ErrObjectNotFound); err != nil {
@@ -84,33 +91,32 @@ func (s *SlabManager) GetOperationFn(payload Transfer) {
 
 	value := valueObject.(Key)
 
-	// Check if the TTL has expired and delete the object if expired
 	if !value.ttl.IsZero() && time.Now().After(value.ttl) {
 		s.store.Delete(key)
-		s.lru[payload.index].Delete(value.pointer) // Remove the node from LRU
+		s.lru[value.slabIndex].Delete(value.pointer)
+
 		memoryPointer := value.pointer.GetPointer()
-		s.slabs[value.slabIndex].freeList.Push(memoryPointer)
+		s.slabs[value.slabIndex].FreeMemory(memoryPointer)
 
 		if _, err := payload.conn.Write(constants.ErrTimeExpire); err != nil {
 			log.Println(err)
 		}
 		return
 	}
-	s.lru[payload.index].Read(value.pointer)
 
-	// Return the field data if found
+	s.lru[value.slabIndex].Read(value.pointer)
+
 	if _, err := payload.conn.Write(value.field); err != nil {
 		log.Println(err)
 	}
 }
 
 func (s *SlabManager) DeleteOperationFn(payload Transfer) {
-	_, keySize, _, _ := decoder.Decode(payload.payload)                                 // Decode the payload
-	key := string(payload.payload[constants.HeaderSize : constants.HeaderSize+keySize]) // Extract key from the payload
+	_, keySize, _, _ := decoder.Decode(payload.payload)
+	key := string(payload.payload[constants.HeaderSize : constants.HeaderSize+keySize])
 
-	s.slabs[payload.index].freeList.Push(unsafe.Pointer(&payload.payload[0])) //delete our header space
+	s.slabs[payload.index].FreeMemory(unsafe.Pointer(&payload.payload[0]))
 
-	// Fetch and delete the object from the store
 	valueObject, isFound := s.store.Load(key)
 	if !isFound {
 		if _, err := payload.conn.Write(constants.ErrObjectNotFound); err != nil {
@@ -120,12 +126,13 @@ func (s *SlabManager) DeleteOperationFn(payload Transfer) {
 	}
 
 	value := valueObject.(Key)
+
 	s.store.Delete(key)
+	s.lru[value.slabIndex].Delete(value.pointer)
 
 	memoryPointer := value.pointer.GetPointer()
+	s.slabs[value.slabIndex].FreeMemory(memoryPointer)
 
-	s.lru[payload.index].Delete(value.pointer) // Remove from LRU
-	s.slabs[value.slabIndex].freeList.Push(memoryPointer)
 	if _, err := payload.conn.Write(constants.ObjectDeleted); err != nil {
 		log.Println(err)
 	}

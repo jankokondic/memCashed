@@ -1,0 +1,22 @@
+goos: linux
+goarch: amd64
+pkg: github.com/WatchJani/memCashed/memcached/server
+cpu: AMD Ryzen 5 3500X 6-Core Processor             
+BenchmarkRealServer_SET_Workers1/64B-6   	  537726	      7525 ns/op	   8.50 MB/s	     184 B/op	       5 allocs/op
+BenchmarkRealServer_SET_Workers1/128B-6  	  446557	      8021 ns/op	  15.96 MB/s	     184 B/op	       5 allocs/op
+BenchmarkRealServer_SET_Workers1/256B-6  	  592406	      7051 ns/op	  36.31 MB/s	     184 B/op	       5 allocs/op
+BenchmarkRealServer_SET_Workers1/512B-6  	  665001	      8141 ns/op	  62.89 MB/s	     184 B/op	       5 allocs/op
+BenchmarkRealServer_SET_Workers1/1024B-6 	  468367	      8070 ns/op	 126.89 MB/s	     184 B/op	       5 allocs/op
+BenchmarkRealServer_SET_Workers1/2048B-6 	  495847	      7687 ns/op	 266.44 MB/s	     184 B/op	       5 allocs/op
+BenchmarkRealServer_SET_Workers1/4096B-6 	  506823	      7661 ns/op	 534.66 MB/s	     184 B/op	       5 allocs/op
+BenchmarkRealServer_SET_Workers1/8192B-6 	  424699	      9119 ns/op	 898.30 MB/s	     184 B/op	       5 allocs/op
+BenchmarkRealServer_SET_Workers1/16384B-6         	  470509	      9743 ns/op	1681.65 MB/s	     184 B/op	       5 allocs/op
+BenchmarkRealServer_SET_Workers1/32768B-6         	  309375	     14600 ns/op	2244.33 MB/s	     184 B/op	       5 allocs/op
+BenchmarkRealServer_SET_Workers1/65536B-6         	  269283	     14394 ns/op	4553.01 MB/s	     184 B/op	       5 allocs/op
+BenchmarkRealServer_SET_Workers1/131072B-6        	  203823	     19431 ns/op	6745.44 MB/s	     184 B/op	       5 allocs/op
+BenchmarkRealServer_SET_Workers1/262144B-6        	  121880	     28419 ns/op	9224.12 MB/s	     184 B/op	       5 allocs/op
+BenchmarkRealServer_SET_Workers1/524288B-6        	   68191	     51192 ns/op	10241.55 MB/s	     184 B/op	       5 allocs/op
+BenchmarkRealServer_SET_Workers1/1048576B-6       	   31147	    108387 ns/op	9674.37 MB/s	     184 B/op	       5 allocs/op
+signal: interrupt
+FAIL	github.com/WatchJani/memCashed/memcached/server	247.000s
+FAIL

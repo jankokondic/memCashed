@@ -1,0 +1,19 @@
+goos: linux
+goarch: amd64
+pkg: github.com/WatchJani/memCashed/memcached/server
+cpu: AMD Ryzen 5 3500X 6-Core Processor             
+BenchmarkTCPServer_SET_WorkersCPU/64B-6 	 1637856	      3581 ns/op	  17.87 MB/s	     192 B/op	       5 allocs/op
+BenchmarkTCPServer_SET_WorkersCPU/128B-6         	 1689417	      3623 ns/op	  35.33 MB/s	     192 B/op	       5 allocs/op
+BenchmarkTCPServer_SET_WorkersCPU/256B-6         	 1581885	      3692 ns/op	  69.35 MB/s	     192 B/op	       5 allocs/op
+BenchmarkTCPServer_SET_WorkersCPU/512B-6         	 1764028	      3355 ns/op	 152.59 MB/s	     192 B/op	       5 allocs/op
+BenchmarkTCPServer_SET_WorkersCPU/1024B-6        	 1728662	      3449 ns/op	 296.89 MB/s	     192 B/op	       5 allocs/op
+BenchmarkTCPServer_SET_WorkersCPU/2048B-6        	 1722604	      3525 ns/op	 581.08 MB/s	     192 B/op	       5 allocs/op
+BenchmarkTCPServer_SET_WorkersCPU/4096B-6        	 1557159	      3663 ns/op	1118.11 MB/s	     192 B/op	       5 allocs/op
+BenchmarkTCPServer_SET_WorkersCPU/8192B-6        	 1465519	      4365 ns/op	1876.84 MB/s	     192 B/op	       5 allocs/op
+BenchmarkTCPServer_SET_WorkersCPU/16384B-6       	 1000000	      5041 ns/op	3250.24 MB/s	     192 B/op	       5 allocs/op
+BenchmarkTCPServer_SET_WorkersCPU/32768B-6       	  885583	      6993 ns/op	4685.51 MB/s	     192 B/op	       5 allocs/op
+BenchmarkTCPServer_SET_WorkersCPU/65536B-6       	  442402	     12110 ns/op	5411.65 MB/s	     192 B/op	       5 allocs/op
+BenchmarkTCPServer_SET_WorkersCPU/131072B-6      	  212733	     24460 ns/op	5358.65 MB/s	     192 B/op	       5 allocs/op
+BenchmarkTCPServer_SET_WorkersCPU/262144B-6      	  112474	     49514 ns/op	5294.36 MB/s	     192 B/op	       5 allocs/op
+BenchmarkTCPServer_SET_WorkersCPU/524288B-6      	   53258	    117384 ns/op	4466.42 MB/s	     192 B/op	       5 allocs/op
+BenchmarkTCPServer_SET_WorkersCPU/1048576B-6     	   25106	    228625 ns/op	4586.44 MB/s	     193 B/op	       5 allocs/op

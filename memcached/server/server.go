@@ -1,7 +1,6 @@
 package server
 
 import (
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -95,9 +94,6 @@ func (s *Server) decrease() {
 // Close safely closes an io.Closer resource (e.g., a connection or listener)
 // and logs an optional message if closing fails.
 func Close(c io.Closer, msg string) {
-	fmt.Println(msg) // Log the provided message.
-
-	// Try closing the resource and log any errors encountered.
 	if err := c.Close(); err != nil {
 		log.Println(err)
 	}

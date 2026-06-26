@@ -137,7 +137,10 @@ func (dll *DLL) Remove() {
 
 // LastNode returns the last node in the doubly linked list.
 func (dll *DLL) LastNode() *Node {
-	return dll.last // Return the last node in the list.
+	dll.RLock()
+	defer dll.RUnlock()
+
+	return dll.last
 }
 
 // Read moves a node to the front of the doubly linked list (making it the new root).
@@ -192,4 +195,31 @@ func (dll *DLL) ReadBack() {
 	for current := dll.last; current != nil; current = current.left {
 		fmt.Println(current.value) // Print the value of the current node.
 	}
+}
+
+func (dll *DLL) PopLastFreeSpace(blockSize int) ([]byte, string, bool) {
+	dll.Lock()
+	defer dll.Unlock()
+
+	if dll.last == nil {
+		return nil, "", false
+	}
+
+	node := dll.last
+
+	if node.left == nil {
+		dll.root = nil
+		dll.last = nil
+	} else {
+		dll.last = node.left
+		dll.last.right = nil
+	}
+
+	node.left = nil
+	node.right = nil
+
+	ptr := node.value.pointer
+	key := node.value.key
+
+	return unsafe.Slice((*byte)(ptr), blockSize), key, true
 }

@@ -1,0 +1,16 @@
+goos: linux
+goarch: amd64
+pkg: github.com/WatchJani/memCashed/memcached/memory_allocator
+cpu: AMD Ryzen 5 3500X 6-Core Processor             
+BenchmarkAllocatorAllocateBlock-6                 	   10000	    162831 ns/op	 1046898 B/op	       0 allocs/op
+BenchmarkSlabAllocateMemory64B-6                  	45572361	        33.80 ns/op	1893.70 MB/s	      58 B/op	       0 allocs/op
+BenchmarkSlabAllocateMemory1KB-6                  	 7736611	       169.5 ns/op	6042.51 MB/s	    1006 B/op	       0 allocs/op
+BenchmarkSlabAllocateMemory4KB-6                  	 2002674	       572.6 ns/op	7152.73 MB/s	    4021 B/op	       0 allocs/op
+BenchmarkSlabAllocateMemory64KB-6                 	  158380	      8865 ns/op	7392.93 MB/s	   64405 B/op	       0 allocs/op
+BenchmarkSlabAllocateMemory1MB-6                  	   10000	    142227 ns/op	7372.55 MB/s	 1046898 B/op	       0 allocs/op
+BenchmarkSlabManagerGetIndex-6                    	188042056	         6.571 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSlabManagerGetSlabMixedSizes-6           	   71263	     16819 ns/op	  121952 B/op	       0 allocs/op
+BenchmarkSlabAllocateMemoryParallel1KB-6          	 7014871	       173.6 ns/op	5898.07 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSlabManagerGetSlabParallelMixedSizes-6   	 6725269	       173.2 ns/op	      15 B/op	       0 allocs/op
+PASS
+ok  	github.com/WatchJani/memCashed/memcached/memory_allocator	18.599s

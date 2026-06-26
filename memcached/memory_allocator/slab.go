@@ -107,19 +107,10 @@ func (s *SlabManager) GetSlab(payloadSize int, conn net.Conn) ([]byte, int, erro
 		return nil, slabIndex, err
 	}
 
-	s.Lock()
-
-	lastNode := s.lru[slabIndex].LastNode()
-	if lastNode == nil {
-		s.Unlock()
+	slabBlock, key, ok := s.lru[slabIndex].PopLastFreeSpace(chunkSize)
+	if !ok {
 		return nil, slabIndex, fmt.Errorf("there is not enough space and LRU is empty")
 	}
-
-	s.lru[slabIndex].Delete(lastNode)
-	slabBlock = s.lru[slabIndex].GetLRUFreeSpace(lastNode, chunkSize)
-	key := lastNode.GetKey()
-
-	s.Unlock()
 
 	s.store.Delete(key)
 
@@ -226,4 +217,11 @@ func (s *Slab) AllocateMemory() ([]byte, error) {
 func (s *Slab) UpdatePage(dataBlock []byte) {
 	s.currentPage = dataBlock
 	s.pagePointer = 0
+}
+
+func (s *Slab) FreeMemory(ptr unsafe.Pointer) {
+	s.Lock()
+	defer s.Unlock()
+
+	s.freeList.Push(ptr)
 }
