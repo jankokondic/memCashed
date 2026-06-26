@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bufio"
 	"errors"
 	"io"
 	"log"
@@ -13,22 +14,33 @@ import (
 )
 
 const (
-	defaultQueueSize      = 65536
-	defaultTimeout        = 5 * time.Second
-	defaultReadBufferSize = 1024*1024 + 64
-	defaultReconnectDelay = 100 * time.Millisecond
-	defaultReconnectTries = 2
+	defaultQueueSize        = 65536
+	defaultTimeout          = 5 * time.Second
+	defaultReadBufferSize   = 1024*1024 + 64
+	defaultWriteBufferSize  = 1024 * 1024
+	defaultReconnectDelay   = 100 * time.Millisecond
+	defaultReconnectTries   = 2
+	defaultResponseHeaderSz = 4
+)
+
+type Mode int
+
+const (
+	ModeSync Mode = iota
+	ModePipeline
 )
 
 type Driver struct {
 	Conn    []*Connection
 	Timeout time.Duration
+	Mode    Mode
 }
 
 type Connection struct {
 	Addr               string
 	NumberOfConnection int
 	PayloadCh          chan request
+	Mode               Mode
 
 	workers []*SingleConnection
 
@@ -39,10 +51,13 @@ type Connection struct {
 type SingleConnection struct {
 	addr           string
 	communicatorCh chan request
+	mode           Mode
 
-	mu         sync.Mutex
-	conn       net.Conn
-	readBuffer []byte
+	mu     sync.Mutex
+	conn   net.Conn
+	reader *bufio.Reader
+	writer *bufio.Writer
+	closed chan struct{}
 }
 
 type Result struct {
@@ -62,6 +77,10 @@ var resultPool = sync.Pool{
 }
 
 func New() (*Driver, error) {
+	return NewWithMode(ModeSync)
+}
+
+func NewWithMode(mode Mode) (*Driver, error) {
 	configuration := types.LoadConfiguration()
 
 	if len(configuration.Server) == 0 {
@@ -71,7 +90,7 @@ func New() (*Driver, error) {
 	connections := make([]*Connection, 0, len(configuration.Server))
 
 	for _, server := range configuration.Server {
-		con, err := NewConnection(server.IpAddr, server.NumberOfConnection)
+		con, err := NewConnectionWithMode(server.IpAddr, server.NumberOfConnection, mode)
 		if err != nil {
 			return nil, err
 		}
@@ -82,10 +101,15 @@ func New() (*Driver, error) {
 	return &Driver{
 		Conn:    connections,
 		Timeout: defaultTimeout,
+		Mode:    mode,
 	}, nil
 }
 
 func NewConnection(addr string, numberConnection int) (*Connection, error) {
+	return NewConnectionWithMode(addr, numberConnection, ModeSync)
+}
+
+func NewConnectionWithMode(addr string, numberConnection int, mode Mode) (*Connection, error) {
 	if addr == "" {
 		return nil, errors.New("server address is empty")
 	}
@@ -98,6 +122,7 @@ func NewConnection(addr string, numberConnection int) (*Connection, error) {
 		Addr:               addr,
 		NumberOfConnection: numberConnection,
 		PayloadCh:          make(chan request, defaultQueueSize),
+		Mode:               mode,
 		workers:            make([]*SingleConnection, 0, numberConnection),
 		closed:             make(chan struct{}),
 	}
@@ -112,20 +137,25 @@ func NewConnection(addr string, numberConnection int) (*Connection, error) {
 
 func (c *Connection) Init() error {
 	for i := 0; i < c.NumberOfConnection; i++ {
-		worker, err := NewSingleConnection(c.PayloadCh, c.Addr)
+		worker, err := NewSingleConnection(c.PayloadCh, c.Addr, c.Mode)
 		if err != nil {
 			_ = c.Close()
 			return err
 		}
 
 		c.workers = append(c.workers, worker)
-		go worker.Worker()
+
+		if c.Mode == ModePipeline {
+			go worker.PipelineWorker()
+		} else {
+			go worker.SyncWorker()
+		}
 	}
 
 	return nil
 }
 
-func NewSingleConnection(communicatorCh chan request, addr string) (*SingleConnection, error) {
+func NewSingleConnection(communicatorCh chan request, addr string, mode Mode) (*SingleConnection, error) {
 	conn, err := net.DialTimeout("tcp", addr, defaultTimeout)
 	if err != nil {
 		return nil, err
@@ -136,8 +166,11 @@ func NewSingleConnection(communicatorCh chan request, addr string) (*SingleConne
 	return &SingleConnection{
 		addr:           addr,
 		communicatorCh: communicatorCh,
+		mode:           mode,
 		conn:           conn,
-		readBuffer:     make([]byte, defaultReadBufferSize),
+		reader:         bufio.NewReaderSize(conn, defaultReadBufferSize),
+		writer:         bufio.NewWriterSize(conn, defaultWriteBufferSize),
+		closed:         make(chan struct{}),
 	}, nil
 }
 
@@ -150,14 +183,13 @@ func configureTCP(conn net.Conn) {
 	_ = tcpConn.SetNoDelay(true)
 	_ = tcpConn.SetKeepAlive(true)
 	_ = tcpConn.SetKeepAlivePeriod(30 * time.Second)
-
 	_ = tcpConn.SetReadBuffer(defaultReadBufferSize)
-	_ = tcpConn.SetWriteBuffer(defaultReadBufferSize)
+	_ = tcpConn.SetWriteBuffer(defaultWriteBufferSize)
 }
 
-func (s *SingleConnection) Worker() {
+func (s *SingleConnection) SyncWorker() {
 	for req := range s.communicatorCh {
-		data, err := s.send(req.payload)
+		data, err := s.sendSync(req.payload)
 
 		req.result <- Result{
 			Data: data,
@@ -166,11 +198,72 @@ func (s *SingleConnection) Worker() {
 	}
 }
 
-func (s *SingleConnection) send(payload []byte) ([]byte, error) {
+func (s *SingleConnection) PipelineWorker() {
+	pending := make(chan request, defaultQueueSize)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		s.pipelineWriter(pending)
+	}()
+
+	go func() {
+		defer wg.Done()
+		s.pipelineReader(pending)
+	}()
+
+	wg.Wait()
+}
+
+func (s *SingleConnection) pipelineWriter(pending chan<- request) {
+	flushTicker := time.NewTicker(200 * time.Microsecond)
+	defer flushTicker.Stop()
+	defer close(pending)
+
+	for {
+		select {
+		case req, ok := <-s.communicatorCh:
+			if !ok {
+				_ = s.writer.Flush()
+				return
+			}
+
+			_, err := s.writer.Write(req.payload)
+			if err != nil {
+				req.result <- Result{Err: err}
+				continue
+			}
+
+			pending <- req
+
+			if s.writer.Buffered() >= 64*1024 {
+				_ = s.writer.Flush()
+			}
+
+		case <-flushTicker.C:
+			_ = s.writer.Flush()
+		}
+	}
+}
+
+func (s *SingleConnection) pipelineReader(pending <-chan request) {
+	for req := range pending {
+		data, err := readFramedResponse(s.reader)
+
+		req.result <- Result{
+			Data: data,
+			Err:  err,
+		}
+	}
+}
+
+func (s *SingleConnection) sendSync(payload []byte) ([]byte, error) {
 	var lastErr error
 
 	for attempt := 0; attempt <= defaultReconnectTries; attempt++ {
-		data, err := s.sendOnce(payload)
+		data, err := s.sendOnceFramed(payload)
 		if err == nil {
 			return data, nil
 		}
@@ -187,27 +280,50 @@ func (s *SingleConnection) send(payload []byte) ([]byte, error) {
 	return nil, lastErr
 }
 
-func (s *SingleConnection) sendOnce(payload []byte) ([]byte, error) {
+func (s *SingleConnection) sendOnceFramed(payload []byte) ([]byte, error) {
 	if s.conn == nil {
 		return nil, errors.New("connection is not available")
 	}
 
-	_, err := s.conn.Write(payload)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.writer.Write(payload)
 	if err != nil {
 		return nil, err
 	}
 
-	n, err := s.conn.Read(s.readBuffer)
+	err = s.writer.Flush()
 	if err != nil {
-		if err == io.EOF {
-			return nil, err
-		}
-
 		return nil, err
 	}
 
-	response := make([]byte, n)
-	copy(response, s.readBuffer[:n])
+	return readFramedResponse(s.reader)
+}
+
+func readFramedResponse(reader *bufio.Reader) ([]byte, error) {
+	header := make([]byte, defaultResponseHeaderSz)
+
+	_, err := io.ReadFull(reader, header)
+	if err != nil {
+		return nil, err
+	}
+
+	size := int(uint32(header[0]) |
+		uint32(header[1])<<8 |
+		uint32(header[2])<<16 |
+		uint32(header[3])<<24)
+
+	if size < 0 || size > defaultReadBufferSize {
+		return nil, errors.New("invalid response size")
+	}
+
+	response := make([]byte, size)
+
+	_, err = io.ReadFull(reader, response)
+	if err != nil {
+		return nil, err
+	}
 
 	return response, nil
 }
@@ -230,6 +346,8 @@ func (s *SingleConnection) reconnect() error {
 	configureTCP(conn)
 
 	s.conn = conn
+	s.reader = bufio.NewReaderSize(conn, defaultReadBufferSize)
+	s.writer = bufio.NewWriterSize(conn, defaultWriteBufferSize)
 
 	return nil
 }
@@ -328,32 +446,12 @@ func (d *Driver) DeleteReq(key []byte) (<-chan []byte, error) {
 }
 
 func (d *Driver) operationSync(payload []byte, route int) ([]byte, error) {
-	if len(d.Conn) == 0 {
-		return nil, errors.New("driver has no connections")
+	resCh, err := d.operationAsync(payload, route)
+	if err != nil {
+		return nil, err
 	}
 
-	if route < 0 || route >= len(d.Conn) {
-		return nil, errors.New("invalid route")
-	}
-
-	resultCh := resultPool.Get().(chan Result)
-
-	req := request{
-		payload: payload,
-		result:  resultCh,
-	}
-
-	select {
-	case d.Conn[route].PayloadCh <- req:
-	default:
-		resultPool.Put(resultCh)
-		return nil, errors.New("request queue full")
-	}
-
-	res := <-resultCh
-
-	resultPool.Put(resultCh)
-
+	res := <-resCh
 	return res.Data, res.Err
 }
 
@@ -366,7 +464,13 @@ func (d *Driver) operationAsync(payload []byte, route int) (chan Result, error) 
 		return nil, errors.New("invalid route")
 	}
 
-	resultCh := make(chan Result, 1)
+	var resultCh chan Result
+
+	if d.Mode == ModeSync {
+		resultCh = resultPool.Get().(chan Result)
+	} else {
+		resultCh = make(chan Result, 1)
+	}
 
 	req := request{
 		payload: payload,
@@ -378,6 +482,10 @@ func (d *Driver) operationAsync(payload []byte, route int) (chan Result, error) 
 		return resultCh, nil
 
 	default:
+		if d.Mode == ModeSync {
+			resultPool.Put(resultCh)
+		}
+
 		return nil, errors.New("request queue full")
 	}
 }

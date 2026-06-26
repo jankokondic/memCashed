@@ -1,5 +1,5 @@
 server:
     - ip_address: :5000
-      number_of_connection: 64
+      number_of_connection: 32
     # - ip_address: :5001
     #   number_of_connection: 13

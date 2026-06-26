@@ -4,7 +4,7 @@ server:
 
   #the maximum number of connections
   # allowed at the same time
-  max_number_connection: 256
+  max_number_connection: 64
 
 #memory_for_allocate allows us to
 # allocate memory at the start of
@@ -17,7 +17,7 @@ memory_for_allocate: 3000
 # of parallel processes within the
 # system (the default number follows
 # the number of slabs)
-number_of_worker: 15
+number_of_worker: 32
 
 # enables us to arbitrarily define
 # our own number of slabs in the

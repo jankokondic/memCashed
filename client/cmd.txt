@@ -1,2 +1,4 @@
-go run main.go -backend custom -workers 64 -duration 60s -warmup 5s -keys 2000 -size 1024 -getratio 70
-go run main.go -backend custom -workers 64 -duration 60s -warmup 5s -keys 2000 -size 1024 -getratio 70
+go run main.go -backend custom-sync -workers 64 -duration 60s -warmup 5s -keys 2000 -size 1024 -getratio 70
+go run main.go -backend custom-pipeline -workers 64 -duration 60s -warmup 5s -keys 2000 -size 1024 -getratio 70 -pipeline 16
+go run main.go -backend memcached-sync -workers 64 -duration 60s -warmup 5s -keys 2000 -size 1024 -getratio 70
+go run main.go -backend memcached-async -workers 64 -duration 60s -warmup 5s -keys 2000 -size 1024 -getratio 70 -pipeline 16

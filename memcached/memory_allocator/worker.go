@@ -27,33 +27,9 @@ func (s *SlabManager) Process(payload Transfer) {
 	}
 }
 
-// Worker listens for transfer jobs and processes them based on the payload command.
 func (s *SlabManager) Worker() {
 	for payload := range s.JobCh {
-		switch ParseOperation(payload.payload) {
-		case constants.SetOperation: // Command to store data
-			s.SetOperationFn(payload)
-		case constants.GetOperation: // Command to get data
-			s.GetOperationFn(payload)
-		case constants.DeleteOperation: // Command to delete data
-			s.DeleteOperationFn(payload)
-		default:
-			log.Println(constants.ErrOperationIsNotSupported)
-		}
-	}
-}
-
-// test usage
-func (s *SlabManager) chooseOperation(payload Transfer) {
-	switch ParseOperation(payload.payload) {
-	case constants.SetOperation: // Command to store data
-		s.SetOperationFn(payload)
-	case constants.GetOperation: // Command to get data
-		s.GetOperationFn(payload)
-	case constants.DeleteOperation: // Command to delete data
-		s.DeleteOperationFn(payload)
-	default:
-		log.Println(constants.ErrOperationIsNotSupported)
+		s.Process(payload)
 	}
 }
 
@@ -83,7 +59,7 @@ func (s *SlabManager) SetOperationFn(payload Transfer) {
 		slabIndex: payload.index,
 	})
 
-	if _, err := payload.conn.Write(constants.ObjectInserted); err != nil {
+	if _, err := payload.conn.Write(decoder.EncodeResponse(constants.ObjectInserted)); err != nil {
 		log.Println(err)
 	}
 }
@@ -96,7 +72,7 @@ func (s *SlabManager) GetOperationFn(payload Transfer) {
 
 	valueObject, isFound := s.store.Load(key)
 	if !isFound {
-		if _, err := payload.conn.Write(constants.ErrObjectNotFound); err != nil {
+		if _, err := payload.conn.Write(decoder.EncodeResponse(constants.ErrObjectNotFound)); err != nil {
 			log.Println(err)
 		}
 		return
@@ -111,7 +87,7 @@ func (s *SlabManager) GetOperationFn(payload Transfer) {
 		memoryPointer := value.pointer.GetPointer()
 		s.slabs[value.slabIndex].FreeMemory(memoryPointer)
 
-		if _, err := payload.conn.Write(constants.ErrTimeExpire); err != nil {
+		if _, err := payload.conn.Write(decoder.EncodeResponse(constants.ErrTimeExpire)); err != nil {
 			log.Println(err)
 		}
 		return
@@ -119,7 +95,7 @@ func (s *SlabManager) GetOperationFn(payload Transfer) {
 
 	s.lru[value.slabIndex].Read(value.pointer)
 
-	if _, err := payload.conn.Write(value.field); err != nil {
+	if _, err := payload.conn.Write(decoder.EncodeResponse(value.field)); err != nil {
 		log.Println(err)
 	}
 }
@@ -132,7 +108,7 @@ func (s *SlabManager) DeleteOperationFn(payload Transfer) {
 
 	valueObject, isFound := s.store.Load(key)
 	if !isFound {
-		if _, err := payload.conn.Write(constants.ErrObjectNotFound); err != nil {
+		if _, err := payload.conn.Write(decoder.EncodeResponse(constants.ErrObjectNotFound)); err != nil {
 			log.Println(err)
 		}
 		return
@@ -146,7 +122,7 @@ func (s *SlabManager) DeleteOperationFn(payload Transfer) {
 	memoryPointer := value.pointer.GetPointer()
 	s.slabs[value.slabIndex].FreeMemory(memoryPointer)
 
-	if _, err := payload.conn.Write(constants.ObjectDeleted); err != nil {
+	if _, err := payload.conn.Write(decoder.EncodeResponse(constants.ObjectDeleted)); err != nil {
 		log.Println(err)
 	}
 }
