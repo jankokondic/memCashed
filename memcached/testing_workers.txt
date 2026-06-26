@@ -1,0 +1,6 @@
+=== RUN   TestWorkerSetGetDeleteFlow
+--- PASS: TestWorkerSetGetDeleteFlow (0.02s)
+=== RUN   TestWorkerExpiredTTL
+--- PASS: TestWorkerExpiredTTL (1.11s)
+PASS
+ok  	github.com/WatchJani/memCashed/memcached/memory_allocator	1.136s

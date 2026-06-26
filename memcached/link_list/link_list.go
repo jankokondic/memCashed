@@ -110,23 +110,29 @@ func (dll *DLL) Delete(node *Node) {
 // Remove deletes the last node from the doubly linked list.
 // It locks the DLL to ensure safe modification of the list.
 func (dll *DLL) Remove() {
-	dll.Lock()         // Lock the DLL to ensure thread-safe modification.
-	defer dll.Unlock() // Unlock the DLL after the operation.
+	dll.Lock()
+	defer dll.Unlock()
 
 	if dll.last == nil {
-		return // If the list is empty, there's nothing to remove.
-	}
-
-	// If the last node has no left neighbor, make the list empty.
-	if dll.last.left == nil {
-		dll.last = nil
-		dll.root = nil
 		return
 	}
 
-	// Otherwise, update the last pointer to the previous node.
+	removed := dll.last
+
+	if dll.last.left == nil {
+		dll.last = nil
+		dll.root = nil
+
+		removed.left = nil
+		removed.right = nil
+		return
+	}
+
 	dll.last = dll.last.left
-	dll.last.right = nil // Set the new last node's right pointer to nil.
+	dll.last.right = nil
+
+	removed.left = nil
+	removed.right = nil
 }
 
 // LastNode returns the last node in the doubly linked list.
@@ -137,27 +143,39 @@ func (dll *DLL) LastNode() *Node {
 // Read moves a node to the front of the doubly linked list (making it the new root).
 // It locks the DLL to prevent concurrent modification.
 func (dll *DLL) Read(node *Node) {
-	dll.Lock()         // Lock the DLL to ensure safe modification.
-	defer dll.Unlock() // Unlock the DLL after the operation.
+	if node == nil {
+		return
+	}
 
-	// If the node is already the root, there's nothing to do.
+	dll.Lock()
+	defer dll.Unlock()
+
 	if node == dll.root {
 		return
 	}
 
-	// Remove the node from its current position.
-	node.left.right = node.right
-	node.right.left = node.left
+	if node.left != nil {
+		node.left.right = node.right
+	}
 
-	// Insert the node at the front (make it the new root).
-	node.right = dll.root
+	if node.right != nil {
+		node.right.left = node.left
+	} else {
+		dll.last = node.left
+	}
+
 	node.left = nil
+	node.right = dll.root
 
-	// Update the current root's left pointer to point to the node.
-	dll.root.left = node
+	if dll.root != nil {
+		dll.root.left = node
+	}
 
-	// Set the root to the node.
 	dll.root = node
+
+	if dll.last == nil {
+		dll.last = node
+	}
 }
 
 // ReadAll traverses the entire doubly linked list from root to last, printing each node's value.
