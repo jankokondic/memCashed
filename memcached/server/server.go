@@ -98,11 +98,18 @@ func (s *Server) HandleConn(conn net.Conn) {
 
 	writer := bufio.NewWriterSize(conn, writeBufferSize)
 
-	readBuf := make([]byte, readBufferSize)
 	pending := make([]byte, 0, readBufferSize)
 
 	for {
-		n, err := conn.Read(readBuf)
+		// Grow pending itself (rare) instead of reading into a scratch
+		// buffer and appending — that append was a second memcpy per read.
+		if len(pending) == cap(pending) {
+			grown := make([]byte, len(pending), cap(pending)*2)
+			copy(grown, pending)
+			pending = grown
+		}
+
+		n, err := conn.Read(pending[len(pending):cap(pending)])
 		if err != nil {
 			if err != io.EOF {
 				log.Println(err)
@@ -110,7 +117,7 @@ func (s *Server) HandleConn(conn net.Conn) {
 			return
 		}
 
-		pending = append(pending, readBuf[:n]...)
+		pending = pending[:len(pending)+n]
 
 		processed := 0
 

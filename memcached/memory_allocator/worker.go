@@ -27,37 +27,31 @@ func (s *SlabManager) Process(payload Transfer) {
 	}
 }
 
-func (s *SlabManager) Worker() {
-	for payload := range s.JobCh {
-		s.Process(payload)
-	}
-}
-
 func (s *SlabManager) SetOperationFn(payload Transfer) {
 	_, keySize, ttl, bodySize := decoder.Decode(payload.payload)
 
 	bodyOffset := constants.HeaderSize + keySize
-	key := string(payload.payload[constants.HeaderSize:bodyOffset])
-
-	if oldValueObject, isFound := s.store.Load(key); isFound {
-		oldValue := oldValueObject.(Key)
-
-		s.lru[oldValue.slabIndex].Delete(oldValue.pointer)
-
-		memoryPointer := oldValue.pointer.GetPointer()
-		s.slabs[oldValue.slabIndex].FreeMemory(memoryPointer)
-	}
+	key := unsafe.String(&payload.payload[constants.HeaderSize], keySize)
 
 	node := s.lru[payload.index].Insert(
 		link_list.NewValue(unsafe.Pointer(&payload.payload[0]), key),
 	)
 
-	s.store.Store(key, Key{
+	newValue := Key{
 		field:     payload.payload[bodyOffset : bodyOffset+bodySize],
 		ttl:       TLLParser(ttl),
 		pointer:   node,
 		slabIndex: payload.index,
-	})
+	}
+
+	// Atomic swap: whichever goroutine's Store lands second sees the
+	// other one's fresh value as "old" — never the same stale entry twice.
+	oldValue, hadOld := s.store.Swap(key, newValue)
+	if hadOld {
+		memoryPointer := oldValue.pointer.GetPointer()
+		s.lru[oldValue.slabIndex].Delete(oldValue.pointer)
+		s.slabs[oldValue.slabIndex].FreeMemory(memoryPointer)
+	}
 
 	if _, err := payload.conn.Write(decoder.EncodeResponse(constants.ObjectInserted)); err != nil {
 		log.Println(err)
@@ -66,11 +60,13 @@ func (s *SlabManager) SetOperationFn(payload Transfer) {
 
 func (s *SlabManager) GetOperationFn(payload Transfer) {
 	_, keySize, _, _ := decoder.Decode(payload.payload)
+	// Must copy here (not unsafe.String): this payload block is freed
+	// on the very next line and could be reused before we're done with key.
 	key := string(payload.payload[constants.HeaderSize : constants.HeaderSize+keySize])
 
 	s.slabs[payload.index].FreeMemory(unsafe.Pointer(&payload.payload[0]))
 
-	valueObject, isFound := s.store.Load(key)
+	value, isFound := s.store.Load(key)
 	if !isFound {
 		if _, err := payload.conn.Write(decoder.EncodeResponse(constants.ErrObjectNotFound)); err != nil {
 			log.Println(err)
@@ -78,14 +74,15 @@ func (s *SlabManager) GetOperationFn(payload Transfer) {
 		return
 	}
 
-	value := valueObject.(Key)
-
 	if !value.ttl.IsZero() && time.Now().After(value.ttl) {
-		s.store.Delete(key)
-		s.lru[value.slabIndex].Delete(value.pointer)
-
-		memoryPointer := value.pointer.GetPointer()
-		s.slabs[value.slabIndex].FreeMemory(memoryPointer)
+		// Only the goroutine that wins the CompareAndDelete actually frees
+		// the node/memory — a racing SET/DELETE on the same key won't
+		// cause a double free.
+		if s.store.CompareAndDelete(key, value) {
+			memoryPointer := value.pointer.GetPointer()
+			s.lru[value.slabIndex].Delete(value.pointer)
+			s.slabs[value.slabIndex].FreeMemory(memoryPointer)
+		}
 
 		if _, err := payload.conn.Write(decoder.EncodeResponse(constants.ErrTimeExpire)); err != nil {
 			log.Println(err)
@@ -106,7 +103,7 @@ func (s *SlabManager) DeleteOperationFn(payload Transfer) {
 
 	s.slabs[payload.index].FreeMemory(unsafe.Pointer(&payload.payload[0]))
 
-	valueObject, isFound := s.store.Load(key)
+	value, isFound := s.store.Load(key)
 	if !isFound {
 		if _, err := payload.conn.Write(decoder.EncodeResponse(constants.ErrObjectNotFound)); err != nil {
 			log.Println(err)
@@ -114,13 +111,11 @@ func (s *SlabManager) DeleteOperationFn(payload Transfer) {
 		return
 	}
 
-	value := valueObject.(Key)
-
-	s.store.Delete(key)
-	s.lru[value.slabIndex].Delete(value.pointer)
-
-	memoryPointer := value.pointer.GetPointer()
-	s.slabs[value.slabIndex].FreeMemory(memoryPointer)
+	if s.store.CompareAndDelete(key, value) {
+		memoryPointer := value.pointer.GetPointer()
+		s.lru[value.slabIndex].Delete(value.pointer)
+		s.slabs[value.slabIndex].FreeMemory(memoryPointer)
+	}
 
 	if _, err := payload.conn.Write(decoder.EncodeResponse(constants.ObjectDeleted)); err != nil {
 		log.Println(err)

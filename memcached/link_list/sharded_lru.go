@@ -28,18 +28,18 @@ type Value struct {
 	key     string
 }
 
+var nodePool = sync.Pool{
+	New: func() any { return &Node{} },
+}
+
 func NewValue(pointer unsafe.Pointer, key string) Value {
-	return Value{
-		pointer: pointer,
-		key:     key,
-	}
+	return Value{pointer: pointer, key: key}
 }
 
 func (n *Node) GetKey() string {
 	if n == nil {
 		return ""
 	}
-
 	return n.value.key
 }
 
@@ -47,7 +47,6 @@ func (n *Node) GetPointer() unsafe.Pointer {
 	if n == nil {
 		return nil
 	}
-
 	return n.value.pointer
 }
 
@@ -59,35 +58,41 @@ func NewShardedLRUWithShardCount(shardCount int) *ShardedLRU {
 	if shardCount <= 0 {
 		shardCount = DefaultShardCount
 	}
-
-	return &ShardedLRU{
-		shards: make([]LRUShard, shardCount),
-	}
+	return &ShardedLRU{shards: make([]LRUShard, shardCount)}
 }
 
 func (lru *ShardedLRU) Insert(value Value) *Node {
 	shard := lru.getShard(value.key)
 
-	node := &Node{
-		value: value,
-	}
+	node := nodePool.Get().(*Node)
+	node.left = nil
+	node.right = nil
+	node.value = value
 
 	shard.mu.Lock()
 
 	oldRoot := shard.root
-
 	if oldRoot != nil {
 		node.right = oldRoot
 		oldRoot.left = node
 	} else {
 		shard.last = node
 	}
-
 	shard.root = node
 
 	shard.mu.Unlock()
 
 	return node
+}
+
+// releaseNode clears the node and returns it to the pool. Callers must have
+// already read anything they need off the node (pointer, key) before
+// calling this — once released, another goroutine may reuse and overwrite it.
+func releaseNode(node *Node) {
+	node.left = nil
+	node.right = nil
+	node.value = Value{}
+	nodePool.Put(node)
 }
 
 func (lru *ShardedLRU) Delete(node *Node) {
@@ -100,6 +105,8 @@ func (lru *ShardedLRU) Delete(node *Node) {
 	shard.mu.Lock()
 	shard.unlinkLocked(node)
 	shard.mu.Unlock()
+
+	releaseNode(node)
 }
 
 func (lru *ShardedLRU) Read(node *Node) {
@@ -115,7 +122,6 @@ func (lru *ShardedLRU) Read(node *Node) {
 		shard.unlinkLocked(node)
 
 		oldRoot := shard.root
-
 		node.left = nil
 		node.right = oldRoot
 
@@ -136,19 +142,18 @@ func (lru *ShardedLRU) PopLastFreeSpace(blockSize int) ([]byte, string, bool) {
 		shard := &lru.shards[i]
 
 		shard.mu.Lock()
-
 		node := shard.last
 		if node == nil {
 			shard.mu.Unlock()
 			continue
 		}
-
 		shard.unlinkLocked(node)
+		shard.mu.Unlock()
 
 		ptr := node.value.pointer
 		key := node.value.key
 
-		shard.mu.Unlock()
+		releaseNode(node) // read ptr/key first, then release
 
 		if ptr == nil {
 			return nil, key, false
@@ -164,27 +169,23 @@ func (lru *ShardedLRU) GetLRUFreeSpace(node *Node, blockSize int) []byte {
 	if node == nil {
 		return nil
 	}
-
 	ptr := node.value.pointer
 	if ptr == nil {
 		return nil
 	}
-
 	return unsafe.Slice((*byte)(ptr), blockSize)
 }
 
 func (lru *ShardedLRU) LastNode(key string) *Node {
 	shard := lru.getShard(key)
-
 	shard.mu.Lock()
 	node := shard.last
 	shard.mu.Unlock()
-
 	return node
 }
 
 func (lru *ShardedLRU) getShard(key string) *LRUShard {
-	index := int(fnv32aString(key)) & (len(lru.shards) - 1)
+	index := int(Fnv32aString(key)) & (len(lru.shards) - 1)
 	return &lru.shards[index]
 }
 
@@ -208,7 +209,9 @@ func (shard *LRUShard) unlinkLocked(node *Node) {
 	node.right = nil
 }
 
-func fnv32aString(key string) uint32 {
+// Fnv32aString is exported so other packages (e.g. the key store in
+// memory_allocator) can shard with the exact same hash distribution as the LRU.
+func Fnv32aString(key string) uint32 {
 	var h uint32 = 2166136261
 
 	for i := 0; i < len(key); i++ {
